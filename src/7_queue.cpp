@@ -216,6 +216,41 @@ struct Network {
                  std::function<void(Network &, RdmaOp &)> &&callback);
   void AddRemoteWrite(uint32_t id,
                       std::function<void(Network &, RdmaOp &)> &&callback);
+
+  Network(const Network &) = delete;
+  Network(Network &&other)
+      : fi(other.fi), fabric(other.fabric), domain(other.domain), cq(other.cq),
+        av(other.av), ep(other.ep), addr(other.addr) {
+    other.fi = nullptr;
+    other.fabric = nullptr;
+    other.domain = nullptr;
+    other.cq = nullptr;
+    other.av = nullptr;
+    other.ep = nullptr;
+  }
+
+  ~Network() {
+    for (const auto &[_, mr] : mr) {
+      FI_CHECK(fi_close(&mr->fid));
+    }
+    if (ep)
+      FI_CHECK(fi_close(&ep->fid));
+    if (av)
+      FI_CHECK(fi_close(&av->fid));
+    if (cq)
+      FI_CHECK(fi_close(&cq->fid));
+    if (domain)
+      FI_CHECK(fi_close(&domain->fid));
+    if (fabric)
+      FI_CHECK(fi_close(&fabric->fid));
+  }
+
+private:
+  Network(struct fi_info *fi, struct fid_fabric *fabric,
+          struct fid_domain *domain, struct fid_cq *cq, struct fid_av *av,
+          struct fid_ep *ep, EfaAddress addr)
+      : fi(fi), fabric(fabric), domain(domain), cq(cq), av(av), ep(ep),
+        addr(addr) {}
 };
 
 void *align_up(void *ptr, size_t align) {
@@ -329,7 +364,7 @@ Network Network::Open(struct fi_info *fi) {
   }
   auto addr = EfaAddress(addrbuf);
 
-  return Network{fi, fabric, domain, cq, av, ep, addr};
+  return Network(fi, fabric, domain, cq, av, ep, addr);
 }
 
 fi_addr_t Network::AddPeerAddress(const EfaAddress &peer_addr) {
@@ -872,6 +907,7 @@ int ServerMain(int argc, char **argv) {
     }
   }
 
+  fi_freeinfo(info);
   return 0;
 }
 
@@ -993,6 +1029,7 @@ int ClientMain(int argc, char **argv) {
   CHECK(expected2 == actual2);
   printf("Data is correct\n");
 
+  fi_freeinfo(info);
   return 0;
 }
 

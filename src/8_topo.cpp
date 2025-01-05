@@ -276,5 +276,6 @@ int main() {
   printf("GPUs: %zu, NICs: %d, Total Bandwidth: %.0f Gbps\n",
          topo_groups.size(), num_nets, total_bw * 1e-9);
   PrintTopologyGroups(topo_groups);
+  fi_freeinfo(info);
   return 0;
 }

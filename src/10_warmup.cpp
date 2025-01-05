@@ -399,8 +399,7 @@ struct Network {
   std::unordered_map<void *, struct fid_mr *> mr;
   std::unordered_map<uint32_t, RdmaOp *> remote_write_ops;
 
-  static Network Open(struct fi_info *fi, int cuda_device,
-                      struct fid_fabric *fabric);
+  static Network Open(struct fi_info *fi, int cuda_device);
 
   fi_addr_t AddPeerAddress(const EfaAddress &peer_addr);
   void RegisterMemory(Buffer &buf);
@@ -416,6 +415,42 @@ struct Network {
                  std::function<void(Network &, RdmaOp &)> &&callback);
   void AddRemoteWrite(uint32_t id,
                       std::function<void(Network &, RdmaOp &)> &&callback);
+
+  Network(const Network &) = delete;
+  Network(Network &&other)
+      : fi(other.fi), fabric(other.fabric), domain(other.domain), cq(other.cq),
+        av(other.av), ep(other.ep), addr(other.addr),
+        cuda_device(other.cuda_device) {
+    other.fi = nullptr;
+    other.fabric = nullptr;
+    other.domain = nullptr;
+    other.cq = nullptr;
+    other.av = nullptr;
+    other.ep = nullptr;
+  }
+
+  ~Network() {
+    for (const auto &[_, mr] : mr) {
+      FI_CHECK(fi_close(&mr->fid));
+    }
+    if (ep)
+      FI_CHECK(fi_close(&ep->fid));
+    if (av)
+      FI_CHECK(fi_close(&av->fid));
+    if (cq)
+      FI_CHECK(fi_close(&cq->fid));
+    if (domain)
+      FI_CHECK(fi_close(&domain->fid));
+    if (fabric)
+      FI_CHECK(fi_close(&fabric->fid));
+  }
+
+private:
+  Network(struct fi_info *fi, struct fid_fabric *fabric,
+          struct fid_domain *domain, struct fid_cq *cq, struct fid_av *av,
+          struct fid_ep *ep, EfaAddress addr, int cuda_device)
+      : fi(fi), fabric(fabric), domain(domain), cq(cq), av(av), ep(ep),
+        addr(addr), cuda_device(cuda_device) {}
 };
 
 struct NetworkGroup {
@@ -517,11 +552,9 @@ struct fi_info *GetInfo() {
   return info;
 }
 
-Network Network::Open(struct fi_info *fi, int cuda_device,
-                      struct fid_fabric *fabric) {
-  if (!fabric) {
-    FI_CHECK(fi_fabric(fi->fabric_attr, &fabric, nullptr));
-  }
+Network Network::Open(struct fi_info *fi, int cuda_device) {
+  struct fid_fabric *fabric;
+  FI_CHECK(fi_fabric(fi->fabric_attr, &fabric, nullptr));
 
   struct fid_domain *domain;
   FI_CHECK(fi_domain(fabric, fi, &domain, nullptr));
@@ -551,7 +584,7 @@ Network Network::Open(struct fi_info *fi, int cuda_device,
   }
   auto addr = EfaAddress(addrbuf);
 
-  return Network{fi, fabric, domain, cq, av, ep, addr, cuda_device};
+  return Network(fi, fabric, domain, cq, av, ep, addr, cuda_device);
 }
 
 fi_addr_t Network::AddPeerAddress(const EfaAddress &peer_addr) {
@@ -1159,8 +1192,7 @@ int ServerMain(int argc, char **argv) {
     std::vector<Network *> group_nets;
     for (auto *fi : topo_groups[cuda_device].fi_infos) {
       int cuda_device = nets.size() / nets_per_gpu;
-      auto *fabric = nets.empty() ? nullptr : nets[0].fabric;
-      nets.push_back(Network::Open(fi, cuda_device, fabric));
+      nets.push_back(Network::Open(fi, cuda_device));
       group_nets.push_back(&nets.back());
       total_bw += info->nic->link_attr->speed;
     }
@@ -1227,6 +1259,7 @@ int ServerMain(int argc, char **argv) {
     }
   }
 
+  fi_freeinfo(info);
   return 0;
 }
 
@@ -1268,8 +1301,7 @@ int ClientMain(int argc, char **argv) {
     std::vector<Network *> group_nets;
     for (auto *fi : topo_groups[cuda_device].fi_infos) {
       int cuda_device = nets.size() / nets_per_gpu;
-      auto *fabric = nets.empty() ? nullptr : nets[0].fabric;
-      nets.push_back(Network::Open(fi, cuda_device, fabric));
+      nets.push_back(Network::Open(fi, cuda_device));
       group_nets.push_back(&nets.back());
       total_bw += info->nic->link_attr->speed;
     }
@@ -1412,6 +1444,7 @@ int ClientMain(int argc, char **argv) {
   printf("\n");
   printf("Data is correct\n");
 
+  fi_freeinfo(info);
   return 0;
 }
 
